@@ -19,6 +19,7 @@ public class PasswordHasher : IPasswordHasher
             passwordHash,
             password);
 
-        return result == PasswordVerificationResult.Success;
+        // Hashes created with fewer PBKDF2 iterations (e.g. by ASP.NET Core 2.2) are still valid
+        return result is PasswordVerificationResult.Success or PasswordVerificationResult.SuccessRehashNeeded;
     }
 }
