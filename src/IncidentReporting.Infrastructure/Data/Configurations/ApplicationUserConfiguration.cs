@@ -12,6 +12,9 @@ public class ApplicationUserConfiguration : IEntityTypeConfiguration<Application
 
         builder.HasKey(x => x.Id);
 
+        builder.Property(x => x.Id)
+            .ValueGeneratedNever();
+
         builder.Property(x => x.FullName)
             .IsRequired()
             .HasMaxLength(150);

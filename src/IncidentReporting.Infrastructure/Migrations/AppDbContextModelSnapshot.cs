@@ -25,7 +25,6 @@ namespace IncidentReporting.Infrastructure.Migrations
             modelBuilder.Entity("IncidentReporting.Domain.Entities.ApplicationUser", b =>
                 {
                     b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
                         .HasColumnType("uniqueidentifier");
 
                     b.Property<DateTime>("CreatedAtUtc")
@@ -36,6 +35,9 @@ namespace IncidentReporting.Infrastructure.Migrations
                         .HasMaxLength(200)
                         .HasColumnType("nvarchar(200)");
 
+                    b.Property<int>("FailedLoginAttempts")
+                        .HasColumnType("int");
+
                     b.Property<string>("FullName")
                         .IsRequired()
                         .HasMaxLength(150)
@@ -43,6 +45,9 @@ namespace IncidentReporting.Infrastructure.Migrations
 
                     b.Property<bool>("IsActive")
                         .HasColumnType("bit");
+
+                    b.Property<DateTime?>("LockoutEndUtc")
+                        .HasColumnType("datetime2");
 
                     b.Property<string>("PasswordHash")
                         .IsRequired()
@@ -63,7 +68,6 @@ namespace IncidentReporting.Infrastructure.Migrations
             modelBuilder.Entity("IncidentReporting.Domain.Entities.Incident", b =>
                 {
                     b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
                         .HasColumnType("uniqueidentifier");
 
                     b.Property<double?>("AiConfidenceScore")
@@ -103,6 +107,15 @@ namespace IncidentReporting.Infrastructure.Migrations
                     b.Property<DateTime?>("ResolvedAtUtc")
                         .HasColumnType("datetime2");
 
+                    b.Property<int>("Source")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(1);
+
+                    b.Property<string>("SourceMessageId")
+                        .HasMaxLength(450)
+                        .HasColumnType("nvarchar(450)");
+
                     b.Property<int>("Status")
                         .HasColumnType("int");
 
@@ -116,13 +129,55 @@ namespace IncidentReporting.Infrastructure.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("SourceMessageId")
+                        .IsUnique()
+                        .HasFilter("[SourceMessageId] IS NOT NULL");
+
                     b.ToTable("Incidents", (string)null);
+                });
+
+            modelBuilder.Entity("IncidentReporting.Domain.Entities.IncidentAttachment", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("ContentType")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("FileName")
+                        .IsRequired()
+                        .HasMaxLength(260)
+                        .HasColumnType("nvarchar(260)");
+
+                    b.Property<Guid>("IncidentId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<long>("SizeBytes")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("StoragePath")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<DateTime>("UploadedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid>("UploadedByUserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("IncidentId");
+
+                    b.ToTable("IncidentAttachments", (string)null);
                 });
 
             modelBuilder.Entity("IncidentReporting.Domain.Entities.IncidentComment", b =>
                 {
                     b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
                         .HasColumnType("uniqueidentifier");
 
                     b.Property<Guid>("AuthorUserId")
@@ -136,19 +191,19 @@ namespace IncidentReporting.Infrastructure.Migrations
 
                     b.Property<string>("Message")
                         .IsRequired()
-                        .HasColumnType("nvarchar(max)");
+                        .HasMaxLength(2000)
+                        .HasColumnType("nvarchar(2000)");
 
                     b.HasKey("Id");
 
                     b.HasIndex("IncidentId");
 
-                    b.ToTable("IncidentComments");
+                    b.ToTable("IncidentComments", (string)null);
                 });
 
             modelBuilder.Entity("IncidentReporting.Domain.Entities.IncidentHistory", b =>
                 {
                     b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
                         .HasColumnType("uniqueidentifier");
 
                     b.Property<int>("Action")
@@ -182,6 +237,84 @@ namespace IncidentReporting.Infrastructure.Migrations
                     b.ToTable("IncidentHistories", (string)null);
                 });
 
+            modelBuilder.Entity("IncidentReporting.Domain.Entities.PasswordResetToken", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime>("ExpiresAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("TokenHash")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("nvarchar(128)");
+
+                    b.Property<DateTime?>("UsedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TokenHash")
+                        .IsUnique();
+
+                    b.HasIndex("UserId");
+
+                    b.ToTable("PasswordResetTokens", (string)null);
+                });
+
+            modelBuilder.Entity("IncidentReporting.Domain.Entities.RefreshToken", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime>("ExpiresAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("ReplacedByTokenHash")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<DateTime?>("RevokedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("TokenHash")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("nvarchar(128)");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TokenHash")
+                        .IsUnique();
+
+                    b.HasIndex("UserId");
+
+                    b.ToTable("RefreshTokens", (string)null);
+                });
+
+            modelBuilder.Entity("IncidentReporting.Domain.Entities.IncidentAttachment", b =>
+                {
+                    b.HasOne("IncidentReporting.Domain.Entities.Incident", "Incident")
+                        .WithMany("Attachments")
+                        .HasForeignKey("IncidentId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Incident");
+                });
+
             modelBuilder.Entity("IncidentReporting.Domain.Entities.IncidentComment", b =>
                 {
                     b.HasOne("IncidentReporting.Domain.Entities.Incident", null)
@@ -204,6 +337,8 @@ namespace IncidentReporting.Infrastructure.Migrations
 
             modelBuilder.Entity("IncidentReporting.Domain.Entities.Incident", b =>
                 {
+                    b.Navigation("Attachments");
+
                     b.Navigation("Comments");
 
                     b.Navigation("Histories");

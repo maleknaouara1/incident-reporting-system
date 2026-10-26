@@ -1,5 +1,6 @@
 using IncidentReporting.Application.Common.Interfaces;
 using IncidentReporting.Application.Incidents.Dtos;
+using IncidentReporting.Domain.Enums;
 using Microsoft.Extensions.Logging;
 using System.Text.Json;
 
@@ -14,10 +15,22 @@ public class MockN8nService : IN8nService
         _logger = logger;
     }
 
-    public Task NotifyIncidentCreatedAsync(IncidentDto incident, CancellationToken cancellationToken = default)
+    public Task NotifyIncidentCreatedAsync(IncidentDto incident, CancellationToken cancellationToken = default) =>
+        Log("incident.created", incident);
+
+    public Task NotifyIncidentAssignedAsync(IncidentDto incident, CancellationToken cancellationToken = default) =>
+        Log("incident.assigned", incident);
+
+    public Task NotifyIncidentStatusChangedAsync(
+        IncidentDto incident,
+        IncidentStatus oldStatus,
+        CancellationToken cancellationToken = default) =>
+        Log("incident.statusChanged", new { OldStatus = oldStatus.ToString(), Incident = incident });
+
+    private Task Log(string eventType, object payload)
     {
-        var payloadJson = JsonSerializer.Serialize(incident, new JsonSerializerOptions { WriteIndented = true });
-        _logger.LogInformation("Mock n8n Notification: Sending incident data to n8n webhook:\n{Payload}", payloadJson);
+        var payloadJson = JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true });
+        _logger.LogInformation("Mock n8n Notification ({EventType}):\n{Payload}", eventType, payloadJson);
         return Task.CompletedTask;
     }
 }

@@ -17,4 +17,8 @@ public class ApplicationUser
     public bool IsActive { get; set; } = true;
 
     public DateTime CreatedAtUtc { get; set; }
+
+    public int FailedLoginAttempts { get; set; }
+
+    public DateTime? LockoutEndUtc { get; set; }
 }

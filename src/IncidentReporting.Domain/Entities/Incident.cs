@@ -20,6 +20,10 @@ public class Incident
 
     public Guid? AssignedToUserId { get; set; }
 
+    public IncidentSource Source { get; set; } = IncidentSource.Manual;
+
+    public string? SourceMessageId { get; set; }
+
     public DateTime CreatedAtUtc { get; set; }
 
     public DateTime? UpdatedAtUtc { get; set; }
@@ -38,4 +42,5 @@ public class Incident
     // Navigation
     public List<IncidentComment> Comments { get; set; } = new();
     public List<IncidentHistory> Histories { get; set; } = new();
+    public List<IncidentAttachment> Attachments { get; set; } = new();
 }

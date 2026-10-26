@@ -7,9 +7,11 @@ public interface IIncidentService
 {
     Task<ApiResponse<IncidentDto>> CreateAsync(
         CreateIncidentRequest request,
+        IncidentCreationContext? creationContext = null,
         CancellationToken cancellationToken = default);
 
-    Task<ApiResponse<List<IncidentDto>>> GetAllAsync(
+    Task<ApiResponse<PagedResult<IncidentDto>>> GetAllAsync(
+        GetIncidentsRequest request,
         CancellationToken cancellationToken = default);
 
     Task<ApiResponse<IncidentDto>> GetByIdAsync(
