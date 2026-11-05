@@ -12,7 +12,7 @@ using IncidentReporting.Application.Auth;
 using IncidentReporting.Application.Users;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
-using Microsoft.OpenApi.Models;
+using Microsoft.OpenApi;
 using System.Text;
 using System.Threading.RateLimiting;
 using IncidentReporting.API.Services;
@@ -175,19 +175,9 @@ builder.Services.AddSwaggerGen(options =>
         Description = "Enter your JWT token only. Example: eyJhbGciOi..."
     });
 
-    options.AddSecurityRequirement(new OpenApiSecurityRequirement
+    options.AddSecurityRequirement(document => new OpenApiSecurityRequirement
     {
-        {
-            new OpenApiSecurityScheme
-            {
-                Reference = new OpenApiReference
-                {
-                    Type = ReferenceType.SecurityScheme,
-                    Id = "Bearer"
-                }
-            },
-            Array.Empty<string>()
-        }
+        [new OpenApiSecuritySchemeReference("Bearer", document)] = []
     });
 });
 builder.Services.AddHttpContextAccessor();
