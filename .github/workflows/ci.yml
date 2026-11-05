@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Restore
+        run: dotnet restore IncidentReportingSystem.sln
+
+      - name: Fail on vulnerable packages
+        run: |
+          dotnet list IncidentReportingSystem.sln package --vulnerable --include-transitive | tee vulnerable.txt
+          if grep -q '>' vulnerable.txt; then
+            echo "::error::Vulnerable NuGet packages found"
+            exit 1
+          fi
+
+      - name: Build
+        run: dotnet build IncidentReportingSystem.sln --no-restore --configuration Release
+
+      - name: Test
+        run: dotnet test IncidentReportingSystem.sln --no-build --configuration Release --verbosity normal

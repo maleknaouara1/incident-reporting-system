@@ -13,24 +13,35 @@ public class IncidentService : IIncidentService
     private readonly ICurrentUserService _currentUserService;
     private readonly IAiIncidentAnalyzer _aiIncidentAnalyzer;
     private readonly IN8nService _n8nService;
+    private readonly IUserRepository _userRepository;
 
     public IncidentService(
         IIncidentRepository incidentRepository,
         ICurrentUserService currentUserService,
         IAiIncidentAnalyzer aiIncidentAnalyzer,
-        IN8nService n8nService)
+        IN8nService n8nService,
+        IUserRepository userRepository)
     {
         _incidentRepository = incidentRepository;
         _currentUserService = currentUserService;
         _aiIncidentAnalyzer = aiIncidentAnalyzer;
         _n8nService = n8nService;
+        _userRepository = userRepository;
     }
 
     public async Task<ApiResponse<IncidentDto>> CreateAsync(
         CreateIncidentRequest request,
+        IncidentCreationContext? creationContext = null,
         CancellationToken cancellationToken = default)
     {
-        var aiResult = await _aiIncidentAnalyzer.AnalyzeIncidentAsync(request.Title, request.Description, cancellationToken);
+        var context = creationContext ?? new IncidentCreationContext(_currentUserService.UserId, IncidentSource.Manual);
+
+        var aiResult = context.PrecomputedAiAnalysis
+            ?? await _aiIncidentAnalyzer.AnalyzeIncidentAsync(request.Title, request.Description, cancellationToken);
+
+        var aiSuggestedResolution = !string.IsNullOrWhiteSpace(aiResult.SuggestedResolution)
+            ? aiResult.SuggestedResolution
+            : $"Suggested Category: {aiResult.SuggestedCategory}, Priority: {aiResult.SuggestedPriority}. Keywords: {string.Join(", ", aiResult.KeyPhrases)}. Urgent: {aiResult.IsUrgent}";
 
         var incident = new Incident
         {
@@ -40,11 +51,13 @@ public class IncidentService : IIncidentService
             Priority = request.Priority,
             Category = request.Category,
             Status = IncidentStatus.New,
-            CreatedByUserId = _currentUserService.UserId,
+            CreatedByUserId = context.CreatedByUserId,
+            Source = context.Source,
+            SourceMessageId = context.SourceMessageId,
             CreatedAtUtc = DateTime.UtcNow,
             AiSummary = aiResult.Summary,
-            AiSuggestedResolution = $"Suggested Category: {aiResult.SuggestedCategory}, Priority: {aiResult.SuggestedPriority}. Keywords: {string.Join(", ", aiResult.KeyPhrases)}. Urgent: {aiResult.IsUrgent}",
-            AiConfidenceScore = 0.95
+            AiSuggestedResolution = aiSuggestedResolution,
+            AiConfidenceScore = aiResult.ConfidenceScore
         };
 
         incident.Histories.Add(new IncidentHistory
@@ -52,17 +65,21 @@ public class IncidentService : IIncidentService
             Id = Guid.NewGuid(),
             IncidentId = incident.Id,
             Action = IncidentHistoryAction.Created,
-            Description = $"Incident created by User {_currentUserService.UserId}.",
-            ChangedByUserId = _currentUserService.UserId,
+            Description = $"Incident created by User {context.CreatedByUserId} (Source: {context.Source}).",
+            ChangedByUserId = context.CreatedByUserId,
             CreatedAtUtc = DateTime.UtcNow
         });
+
+        var aiAnalysisDescription = context.PrecomputedAiAnalysis is not null
+            ? $"AI Analysis (email/n8n triage) applied. Suggested Category: {aiResult.SuggestedCategory}, Suggested Priority: {aiResult.SuggestedPriority}."
+            : $"AI Analysis completed. Suggested Category: {aiResult.SuggestedCategory}, Suggested Priority: {aiResult.SuggestedPriority}.";
 
         incident.Histories.Add(new IncidentHistory
         {
             Id = Guid.NewGuid(),
             IncidentId = incident.Id,
             Action = IncidentHistoryAction.AiAnalysisGenerated,
-            Description = $"AI Analysis completed. Suggested Category: {aiResult.SuggestedCategory}, Suggested Priority: {aiResult.SuggestedPriority}.",
+            Description = aiAnalysisDescription,
             ChangedByUserId = null,
             CreatedAtUtc = DateTime.UtcNow
         });
@@ -80,16 +97,26 @@ public class IncidentService : IIncidentService
         };
     }
 
-    public async Task<ApiResponse<List<IncidentDto>>> GetAllAsync(
+    public async Task<ApiResponse<PagedResult<IncidentDto>>> GetAllAsync(
+        GetIncidentsRequest request,
         CancellationToken cancellationToken = default)
     {
-        var incidents = await _incidentRepository.GetAllAsync(cancellationToken);
+        var (items, totalCount) = await _incidentRepository.GetPagedAsync(request, cancellationToken);
 
-        return new ApiResponse<List<IncidentDto>>
+        var pageSize = Math.Clamp(request.PageSize, 1, 100);
+        var pageNumber = Math.Max(request.PageNumber, 1);
+
+        return new ApiResponse<PagedResult<IncidentDto>>
         {
             Success = true,
             Message = "Incidents retrieved successfully.",
-            Data = incidents.Select(MapToDto).ToList()
+            Data = new PagedResult<IncidentDto>
+            {
+                Items = items.Select(MapToDto).ToList(),
+                PageNumber = pageNumber,
+                PageSize = pageSize,
+                TotalCount = totalCount
+            }
         };
     }
 
@@ -144,9 +171,26 @@ public async Task<ApiResponse<IncidentDto>> AssignAsync(
         };
     }
 
+    // Only active staff can own an incident; never trust the id sent by the client
+    var assignee = await _userRepository.GetByIdAsync(request.AssignedToUserId, cancellationToken);
+
+    if (assignee is null || !assignee.IsActive || assignee.Role == UserRole.Reporter)
+    {
+        return new ApiResponse<IncidentDto>
+        {
+            Success = false,
+            Message = "Invalid assignee.",
+            Errors = new List<string> { "Incidents can only be assigned to an active Engineer or Admin." }
+        };
+    }
+
     var oldAssignee = incident.AssignedToUserId;
-    incident.AssignedToUserId = request.AssignedToUserId;
-    incident.Status = IncidentStatus.Assigned;
+    incident.AssignedToUserId = assignee.Id;
+
+    // Reassigning keeps the current progress; only a new incident moves to Assigned
+    if (incident.Status == IncidentStatus.New)
+        incident.Status = IncidentStatus.Assigned;
+
     incident.UpdatedAtUtc = DateTime.UtcNow;
 
     incident.Histories.Add(new IncidentHistory
@@ -154,20 +198,23 @@ public async Task<ApiResponse<IncidentDto>> AssignAsync(
         Id = Guid.NewGuid(),
         IncidentId = incident.Id,
         Action = IncidentHistoryAction.Assigned,
-        Description = $"Incident assigned to User {request.AssignedToUserId}.",
+        Description = $"Incident assigned to {assignee.FullName}.",
         OldValue = oldAssignee?.ToString(),
-        NewValue = request.AssignedToUserId.ToString(),
+        NewValue = assignee.Id.ToString(),
         ChangedByUserId = _currentUserService.UserId,
         CreatedAtUtc = DateTime.UtcNow
     });
 
     await _incidentRepository.UpdateAsync(incident, cancellationToken);
 
+    var assignedDto = MapToDto(incident);
+    await _n8nService.NotifyIncidentAssignedAsync(assignedDto, cancellationToken);
+
     return new ApiResponse<IncidentDto>
     {
         Success = true,
         Message = "Incident assigned successfully.",
-        Data = MapToDto(incident)
+        Data = assignedDto
     };
 }
 public async Task<ApiResponse<IncidentDto>> UpdateStatusAsync(
@@ -234,11 +281,14 @@ public async Task<ApiResponse<IncidentDto>> UpdateStatusAsync(
 
     await _incidentRepository.UpdateAsync(incident, cancellationToken);
 
+    var statusChangedDto = MapToDto(incident);
+    await _n8nService.NotifyIncidentStatusChangedAsync(statusChangedDto, oldStatus, cancellationToken);
+
     return new ApiResponse<IncidentDto>
     {
         Success = true,
         Message = "Incident status updated successfully.",
-        Data = MapToDto(incident)
+        Data = statusChangedDto
     };
 }private static bool IsValidTransition(
     IncidentStatus currentStatus,
@@ -281,12 +331,27 @@ public async Task<ApiResponse<IncidentDto>> AddCommentAsync(
         };
     }
 
+    var message = request.Message?.Trim() ?? string.Empty;
+
+    if (message.Length == 0 || message.Length > 2000)
+    {
+        return new ApiResponse<IncidentDto>
+        {
+            Success = false,
+            Message = "Invalid comment.",
+            Errors = new List<string> { "A comment must contain between 1 and 2000 characters." }
+        };
+    }
+
+    // The author is always the signed-in user, so comments can't be posted in someone else's name
+    var authorUserId = _currentUserService.UserId;
+
     incident.Comments.Add(new IncidentComment
     {
         Id = Guid.NewGuid(),
         IncidentId = incident.Id,
-        Message = request.Message,
-        AuthorUserId = request.AuthorUserId,
+        Message = message,
+        AuthorUserId = authorUserId,
         CreatedAtUtc = DateTime.UtcNow
     });
 
@@ -297,7 +362,7 @@ public async Task<ApiResponse<IncidentDto>> AddCommentAsync(
         Id = Guid.NewGuid(),
         IncidentId = incident.Id,
         Action = IncidentHistoryAction.CommentAdded,
-        Description = $"Comment added by User {request.AuthorUserId}.",
+        Description = $"Comment added by User {authorUserId}.",
         ChangedByUserId = _currentUserService.UserId,
         CreatedAtUtc = DateTime.UtcNow
     });
@@ -361,6 +426,7 @@ public async Task<ApiResponse<List<IncidentHistoryDto>>> GetTimelineAsync(
             Category = incident.Category,
             CreatedByUserId = incident.CreatedByUserId,
             AssignedToUserId = incident.AssignedToUserId,
+            Source = incident.Source,
             CreatedAtUtc = incident.CreatedAtUtc,
             UpdatedAtUtc = incident.UpdatedAtUtc,
             ResolvedAtUtc = incident.ResolvedAtUtc,

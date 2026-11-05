@@ -6,5 +6,6 @@ public enum IncidentHistoryAction
     AiAnalysisGenerated = 2,
     Assigned = 3,
     StatusChanged = 4,
-    CommentAdded = 5
+    CommentAdded = 5,
+    AttachmentAdded = 6
 }

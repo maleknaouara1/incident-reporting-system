@@ -1,4 +1,5 @@
 using IncidentReporting.Domain.Entities;
+using IncidentReporting.Domain.Enums;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 
@@ -11,6 +12,9 @@ public class IncidentConfiguration : IEntityTypeConfiguration<Incident>
         builder.ToTable("Incidents");
 
         builder.HasKey(x => x.Id);
+
+        builder.Property(x => x.Id)
+            .ValueGeneratedNever();
 
         builder.Property(x => x.Title)
             .IsRequired()
@@ -37,6 +41,17 @@ public class IncidentConfiguration : IEntityTypeConfiguration<Incident>
 
         builder.Property(x => x.AiSuggestedResolution)
             .HasMaxLength(4000);
+
+        builder.Property(x => x.Source)
+            .IsRequired()
+            .HasDefaultValue(IncidentSource.Manual);
+
+        builder.Property(x => x.SourceMessageId)
+            .HasMaxLength(450);
+
+        builder.HasIndex(x => x.SourceMessageId)
+            .IsUnique()
+            .HasFilter("[SourceMessageId] IS NOT NULL");
 
         builder.HasMany(x => x.Comments)
             .WithOne()
