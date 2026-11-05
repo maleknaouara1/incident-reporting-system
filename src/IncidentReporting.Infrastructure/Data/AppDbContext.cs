@@ -24,4 +24,13 @@ public class AppDbContext : DbContext
 
         modelBuilder.ApplyConfigurationsFromAssembly(typeof(AppDbContext).Assembly);
     }
+
+    // Every timestamp is written as UTC, but SQL Server's datetime2 has no time zone, so EF reads it
+    // back as DateTimeKind.Unspecified and the API serializes it without "Z" (browsers then treat it as
+    // local time). Mark values read from the database as UTC.
+    protected override void ConfigureConventions(ModelConfigurationBuilder configurationBuilder)
+    {
+        configurationBuilder.Properties<DateTime>().HaveConversion<UtcDateTimeConverter>();
+        configurationBuilder.Properties<DateTime?>().HaveConversion<UtcDateTimeConverter>();
+    }
 }
