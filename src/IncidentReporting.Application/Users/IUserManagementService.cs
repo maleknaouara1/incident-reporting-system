@@ -8,6 +8,10 @@ public interface IUserManagementService
     Task<ApiResponse<List<UserSummaryDto>>> GetAllAsync(
         CancellationToken cancellationToken = default);
 
+    // Names and roles for every staff member to display; no emails
+    Task<ApiResponse<List<UserDirectoryEntryDto>>> GetDirectoryAsync(
+        CancellationToken cancellationToken = default);
+
     Task<ApiResponse<UserSummaryDto>> ChangeRoleAsync(
         Guid userId,
         ChangeUserRoleRequest request,
