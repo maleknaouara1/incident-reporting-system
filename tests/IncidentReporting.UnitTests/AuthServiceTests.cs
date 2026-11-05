@@ -5,6 +5,7 @@ using IncidentReporting.Application.Common.Settings;
 using IncidentReporting.Application.Dtos;
 using IncidentReporting.Domain.Entities;
 using IncidentReporting.Domain.Enums;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using System;
 using System.Collections.Generic;
@@ -118,6 +119,31 @@ public class AuthServiceTests
         }
     }
 
+    private class CapturingEmailSender : IEmailSender
+    {
+        public List<(string To, string Subject, string Body)> Sent { get; } = new();
+
+        public Task SendAsync(string toEmail, string subject, string body, CancellationToken cancellationToken = default)
+        {
+            Sent.Add((toEmail, subject, body));
+            return Task.CompletedTask;
+        }
+    }
+
+    private class FailingEmailSender : IEmailSender
+    {
+        public Task SendAsync(string toEmail, string subject, string body, CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("SMTP server unreachable");
+    }
+
+    // Base64-style token with characters that must be escaped in a URL
+    private class FixedTokenGenerator : IJwtTokenGenerator
+    {
+        public string GenerateToken(ApplicationUser user) => $"access-token-for-{user.Id}";
+
+        public string GenerateRefreshToken() => "ab+c/d==";
+    }
+
     private class PlainTextPasswordHasher : IPasswordHasher
     {
         public string HashPassword(string password) => $"HASHED::{password}";
@@ -136,7 +162,9 @@ public class AuthServiceTests
 
     private static AuthService CreateSut(
         InMemoryUserRepository userRepository,
-        InMemoryRefreshTokenRepository refreshTokenRepository)
+        InMemoryRefreshTokenRepository refreshTokenRepository,
+        IEmailSender? emailSender = null,
+        IJwtTokenGenerator? tokenGenerator = null)
     {
         var jwtSettings = Options.Create(new JwtSettings
         {
@@ -150,11 +178,13 @@ public class AuthServiceTests
         return new AuthService(
             userRepository,
             new PlainTextPasswordHasher(),
-            new SequentialJwtTokenGenerator(),
+            tokenGenerator ?? new SequentialJwtTokenGenerator(),
             refreshTokenRepository,
             new InMemoryPasswordResetTokenRepository(),
-            new NoOpEmailSender(),
-            jwtSettings);
+            emailSender ?? new NoOpEmailSender(),
+            jwtSettings,
+            Options.Create(new FrontendSettings { BaseUrl = "https://app.example.test/" }),
+            NullLogger<AuthService>.Instance);
     }
 
     [Fact]
@@ -261,5 +291,55 @@ public class AuthServiceTests
 
         var refreshAfterRevoke = await sut.RefreshTokenAsync(new RefreshTokenRequest { RefreshToken = login.Data!.RefreshToken });
         Assert.False(refreshAfterRevoke.Success);
+    }
+
+    private const string GenericResetMessage = "If an account with that email exists, a password reset link has been sent.";
+
+    private static async Task<InMemoryUserRepository> UsersWithJaneAsync()
+    {
+        var users = new InMemoryUserRepository();
+        await CreateSut(users, new InMemoryRefreshTokenRepository())
+            .RegisterAsync(new RegisterRequest { FullName = "Jane", Email = "jane@example.com", Password = "StrongP@ssw0rd" });
+        return users;
+    }
+
+    [Fact]
+    public async Task ForgotPasswordAsync_EmailsAResetLinkWithAnEscapedToken()
+    {
+        var users = await UsersWithJaneAsync();
+        var email = new CapturingEmailSender();
+        var sut = CreateSut(users, new InMemoryRefreshTokenRepository(), email, new FixedTokenGenerator());
+
+        var response = await sut.ForgotPasswordAsync(new ForgotPasswordRequest { Email = "jane@example.com" });
+
+        Assert.True(response.Success);
+        var sent = Assert.Single(email.Sent);
+        Assert.Equal("jane@example.com", sent.To);
+        Assert.Contains("https://app.example.test/reset-password?token=ab%2Bc%2Fd%3D%3D", sent.Body);
+    }
+
+    [Fact]
+    public async Task ForgotPasswordAsync_UnknownEmail_SendsNothingAndReturnsTheSameMessage()
+    {
+        var email = new CapturingEmailSender();
+        var sut = CreateSut(new InMemoryUserRepository(), new InMemoryRefreshTokenRepository(), email);
+
+        var response = await sut.ForgotPasswordAsync(new ForgotPasswordRequest { Email = "nobody@example.com" });
+
+        Assert.True(response.Success);
+        Assert.Equal(GenericResetMessage, response.Message);
+        Assert.Empty(email.Sent);
+    }
+
+    [Fact]
+    public async Task ForgotPasswordAsync_WhenTheEmailCannotBeSent_StillReturnsTheGenericMessage()
+    {
+        var users = await UsersWithJaneAsync();
+        var sut = CreateSut(users, new InMemoryRefreshTokenRepository(), new FailingEmailSender());
+
+        var response = await sut.ForgotPasswordAsync(new ForgotPasswordRequest { Email = "jane@example.com" });
+
+        Assert.True(response.Success);
+        Assert.Equal(GenericResetMessage, response.Message);
     }
 }

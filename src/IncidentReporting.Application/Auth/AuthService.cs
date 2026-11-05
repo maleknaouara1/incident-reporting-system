@@ -7,6 +7,7 @@ using IncidentReporting.Application.Common.Settings;
 using IncidentReporting.Application.Dtos;
 using IncidentReporting.Domain.Entities;
 using IncidentReporting.Domain.Enums;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace IncidentReporting.Application.Auth;
@@ -24,6 +25,8 @@ public class AuthService : IAuthService
     private readonly IPasswordResetTokenRepository _passwordResetTokenRepository;
     private readonly IEmailSender _emailSender;
     private readonly JwtSettings _jwtSettings;
+    private readonly FrontendSettings _frontendSettings;
+    private readonly ILogger<AuthService> _logger;
 
     public AuthService(
         IUserRepository userRepository,
@@ -32,7 +35,9 @@ public class AuthService : IAuthService
         IRefreshTokenRepository refreshTokenRepository,
         IPasswordResetTokenRepository passwordResetTokenRepository,
         IEmailSender emailSender,
-        IOptions<JwtSettings> jwtSettings)
+        IOptions<JwtSettings> jwtSettings,
+        IOptions<FrontendSettings> frontendSettings,
+        ILogger<AuthService> logger)
     {
         _userRepository = userRepository;
         _passwordHasher = passwordHasher;
@@ -41,6 +46,8 @@ public class AuthService : IAuthService
         _passwordResetTokenRepository = passwordResetTokenRepository;
         _emailSender = emailSender;
         _jwtSettings = jwtSettings.Value;
+        _frontendSettings = frontendSettings.Value;
+        _logger = logger;
     }
 
     public async Task<ApiResponse<RegisterResponse>> RegisterAsync(
@@ -248,11 +255,27 @@ public class AuthService : IAuthService
                 },
                 cancellationToken);
 
-            await _emailSender.SendAsync(
-                user.Email,
-                "Reset your password",
-                $"Use this token to reset your password. It expires in {PasswordResetTokenLifetime.TotalMinutes:N0} minutes.\n\nToken: {rawToken}",
-                cancellationToken);
+            // The token is Base64, so it must be escaped before going into a query string
+            var resetLink = $"{_frontendSettings.BaseUrl.TrimEnd('/')}/reset-password?token={Uri.EscapeDataString(rawToken)}";
+
+            try
+            {
+                await _emailSender.SendAsync(
+                    user.Email,
+                    "Reset your password",
+                    $"Hello {user.FullName},\n\n" +
+                    $"Open this link to choose a new password. It expires in {PasswordResetTokenLifetime.TotalMinutes:N0} minutes and works only once:\n\n" +
+                    $"{resetLink}\n\n" +
+                    "If the link does not open, copy this code into the reset page:\n" +
+                    $"{rawToken}\n\n" +
+                    "If you did not ask for a password reset, you can ignore this email.",
+                    cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                // Still answer with the generic message: a failure only for existing accounts would reveal them
+                _logger.LogError(ex, "Could not send the password reset email for user {UserId}.", user.Id);
+            }
         }
 
         return new ApiResponse<bool> { Success = true, Message = genericMessage, Data = true };
