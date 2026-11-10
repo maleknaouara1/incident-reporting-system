@@ -1,6 +1,9 @@
+using IncidentReporting.API.Auth;
 using IncidentReporting.Application.Auth;
 using IncidentReporting.Application.Common.Models;
+using IncidentReporting.Application.Common.Settings;
 using IncidentReporting.Application.Dtos;
+using Microsoft.Extensions.Options;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.RateLimiting;
@@ -13,11 +16,22 @@ namespace IncidentReporting.API.Controllers;
 public class AuthController : ControllerBase
 {
     private readonly IAuthService _authService;
+    private readonly JwtSettings _jwtSettings;
 
-    public AuthController(IAuthService authService)
+    public AuthController(IAuthService authService, IOptions<JwtSettings> jwtSettings)
     {
         _authService = authService;
+        _jwtSettings = jwtSettings.Value;
     }
+
+    private void SetRefreshTokenCookie(string refreshToken) =>
+        Response.Cookies.Append(
+            RefreshTokenCookie.Name,
+            refreshToken,
+            RefreshTokenCookie.Options(Request.IsHttps, DateTimeOffset.UtcNow.AddDays(_jwtSettings.RefreshTokenExpiryDays)));
+
+    private void DeleteRefreshTokenCookie() =>
+        Response.Cookies.Delete(RefreshTokenCookie.Name, RefreshTokenCookie.Options(Request.IsHttps, expires: null));
 
     [HttpPost("register")]
     public async Task<ActionResult<ApiResponse<RegisterResponse>>> Register(
@@ -46,37 +60,57 @@ public class AuthController : ControllerBase
         if (!response.Success)
             return Unauthorized(response);
 
+        SetRefreshTokenCookie(response.Data!.RefreshToken);
         return Ok(response);
     }
 
+    // The refresh token only travels in the HttpOnly cookie, never in the body
     [HttpPost("refresh")]
     public async Task<ActionResult<ApiResponse<AuthResponse>>> Refresh(
-        RefreshTokenRequest request,
         CancellationToken cancellationToken)
     {
+        var refreshToken = Request.Cookies[RefreshTokenCookie.Name];
+
+        if (string.IsNullOrEmpty(refreshToken))
+        {
+            return Unauthorized(new ApiResponse<AuthResponse>
+            {
+                Success = false,
+                Message = "Invalid or expired refresh token."
+            });
+        }
+
         var response = await _authService.RefreshTokenAsync(
-            request,
+            new RefreshTokenRequest { RefreshToken = refreshToken },
             cancellationToken);
 
         if (!response.Success)
+        {
+            DeleteRefreshTokenCookie();
             return Unauthorized(response);
+        }
 
+        // Refresh tokens rotate, so the cookie is replaced on every refresh
+        SetRefreshTokenCookie(response.Data!.RefreshToken);
         return Ok(response);
     }
 
     [HttpPost("logout")]
     public async Task<ActionResult<ApiResponse<bool>>> Logout(
-        RefreshTokenRequest request,
         CancellationToken cancellationToken)
     {
-        var response = await _authService.RevokeTokenAsync(
-            request,
-            cancellationToken);
+        var refreshToken = Request.Cookies[RefreshTokenCookie.Name];
 
-        if (!response.Success)
-            return BadRequest(response);
+        if (!string.IsNullOrEmpty(refreshToken))
+        {
+            // Best effort: an unknown or already revoked token still ends the session below
+            await _authService.RevokeTokenAsync(
+                new RefreshTokenRequest { RefreshToken = refreshToken },
+                cancellationToken);
+        }
 
-        return Ok(response);
+        DeleteRefreshTokenCookie();
+        return Ok(new ApiResponse<bool> { Success = true, Message = "Logged out.", Data = true });
     }
 
     [HttpPost("forgot-password")]
