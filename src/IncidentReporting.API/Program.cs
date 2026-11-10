@@ -54,7 +54,9 @@ builder.Services.AddCors(options =>
     {
         policy.WithOrigins(frontendSettings.BaseUrl.TrimEnd('/'))
               .AllowAnyHeader()
-              .AllowAnyMethod();
+              .AllowAnyMethod()
+              // Lets the browser send the HttpOnly refresh token cookie to /api/auth
+              .AllowCredentials();
     });
 });
 
