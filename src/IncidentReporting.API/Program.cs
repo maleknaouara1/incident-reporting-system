@@ -27,8 +27,28 @@ using Microsoft.AspNetCore.RateLimiting;
 using IncidentReporting.Application.Incidents.Attachments;
 using IncidentReporting.Infrastructure.Email;
 using IncidentReporting.Infrastructure.Storage;
+using Microsoft.AspNetCore.HttpOverrides;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// Behind a reverse proxy (Docker deployment) the API only sees the proxy's address and plain HTTP.
+// Trust X-Forwarded-For/Proto so rate limiting is per real client and HTTPS is detected (Secure cookies).
+// Only enable this when the API is reachable exclusively through the proxy.
+var reverseProxySection = builder.Configuration.GetSection("ReverseProxy");
+var behindReverseProxy = reverseProxySection.GetValue<bool>("Enabled");
+
+if (behindReverseProxy)
+{
+    builder.Services.Configure<ForwardedHeadersOptions>(options =>
+    {
+        options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+        // One hop per proxy in front of the API (Caddy + nginx = 2)
+        options.ForwardLimit = reverseProxySection.GetValue("ForwardLimit", 1);
+        // The proxies live on the private Docker network, whose addresses aren't known in advance
+        options.KnownIPNetworks.Clear();
+        options.KnownProxies.Clear();
+    });
+}
 
 builder.Services.Configure<JwtSettings>(builder.Configuration.GetSection(JwtSettings.SectionName));
 
@@ -215,6 +235,12 @@ using (var startupScope = app.Services.CreateScope())
     await AdminSeeder.SeedAsync(startupScope.ServiceProvider, app.Configuration);
 }
 
+if (behindReverseProxy)
+{
+    // Must run first so everything after sees the real client IP and scheme
+    app.UseForwardedHeaders();
+}
+
 app.UseExceptionHandler();
 
 if (app.Environment.IsDevelopment())
@@ -227,7 +253,12 @@ else
     app.UseHsts();
 }
 
-app.UseHttpsRedirection();
+if (!behindReverseProxy)
+{
+    // Behind the proxy, HTTP→HTTPS redirection is the proxy's job
+    app.UseHttpsRedirection();
+}
+
 app.UseCors("FrontendCorsPolicy");
 app.UseRateLimiter();
 app.UseAuthentication();

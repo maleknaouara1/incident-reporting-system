@@ -1,0 +1,96 @@
+# Production stack: one domain, HTTPS by Caddy, nginx serving the Angular app and proxying /api.
+#
+#   Internet ──443──> caddy ──> web (nginx: Angular + /api proxy) ──> api ──> db
+#                                                                     migrate (runs once)
+#
+# Usage (from this folder): cp .env.example .env, fill it in, then
+#   docker compose up -d --build
+name: incident-reporting
+
+x-db-connection: &db-connection "Server=db;Database=${DB_NAME:-IncidentReportingDb};User Id=sa;Password=${SQL_SA_PASSWORD};TrustServerCertificate=True;Encrypt=True"
+
+services:
+  db:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_PID: ${MSSQL_PID:-Express}
+      MSSQL_SA_PASSWORD: ${SQL_SA_PASSWORD:?Set SQL_SA_PASSWORD in .env}
+    volumes:
+      - sqldata:/var/opt/mssql
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -Q 'SELECT 1' -b -o /dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    restart: unless-stopped
+
+  # Applies pending EF Core migrations, then exits
+  migrate:
+    build:
+      context: ..
+      target: migrator
+    command: ["--connection", *db-connection]
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    build:
+      context: ..
+      target: api
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ConnectionStrings__DefaultConnection: *db-connection
+      Jwt__Key: ${JWT_KEY:?Set JWT_KEY in .env (at least 32 characters)}
+      Frontend__BaseUrl: https://${DOMAIN:?Set DOMAIN in .env}
+      # Caddy + nginx sit in front of the API
+      ReverseProxy__Enabled: "true"
+      ReverseProxy__ForwardLimit: "2"
+      Seed__AdminEmail: ${ADMIN_EMAIL:-}
+      Seed__AdminPassword: ${ADMIN_PASSWORD:-}
+      Smtp__IsMockEnabled: ${SMTP_MOCK:-true}
+      Smtp__Host: ${SMTP_HOST:-}
+      Smtp__Port: ${SMTP_PORT:-587}
+      Smtp__Username: ${SMTP_USERNAME:-}
+      Smtp__Password: ${SMTP_PASSWORD:-}
+      Smtp__FromAddress: ${SMTP_FROM:-no-reply@incidentreporting.local}
+    volumes:
+      - attachments:/app/App_Data
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  web:
+    build:
+      # The Angular repository; override WEB_CONTEXT to build from a local checkout
+      context: ${WEB_CONTEXT:-https://github.com/maleknaouara1/incident-reporting-angular.git#main}
+    depends_on:
+      - api
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2.8-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      DOMAIN: ${DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL:-}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - web
+    restart: unless-stopped
+
+volumes:
+  sqldata:
+  attachments:
+  caddy_data:
+  caddy_config:

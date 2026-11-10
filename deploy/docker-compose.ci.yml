@@ -1,0 +1,5 @@
+# CI smoke test only: no Caddy/TLS, nginx published on localhost:8080.
+services:
+  web:
+    ports:
+      - "8080:8080"
