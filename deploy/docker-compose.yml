@@ -32,6 +32,10 @@ services:
       context: ..
       target: migrator
     command: ["--connection", *db-connection]
+    environment:
+      # The bundle builds the API's services to create the DbContext, and the API's startup
+      # refuses to run without a signing key (nothing is signed here)
+      Jwt__Key: ${JWT_KEY:?Set JWT_KEY in .env (at least 32 characters)}
     depends_on:
       db:
         condition: service_healthy
