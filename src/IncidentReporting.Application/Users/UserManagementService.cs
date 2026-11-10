@@ -26,6 +26,28 @@ public class UserManagementService : IUserManagementService
         };
     }
 
+    public async Task<ApiResponse<List<UserDirectoryEntryDto>>> GetDirectoryAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var users = await _userRepository.GetAllAsync(cancellationToken);
+
+        return new ApiResponse<List<UserDirectoryEntryDto>>
+        {
+            Success = true,
+            Message = "User directory retrieved successfully.",
+            Data = users
+                .OrderBy(user => user.FullName, StringComparer.OrdinalIgnoreCase)
+                .Select(user => new UserDirectoryEntryDto
+                {
+                    Id = user.Id,
+                    FullName = user.FullName,
+                    Role = user.Role,
+                    IsActive = user.IsActive
+                })
+                .ToList()
+        };
+    }
+
     public async Task<ApiResponse<UserSummaryDto>> ChangeRoleAsync(
         Guid userId,
         ChangeUserRoleRequest request,
