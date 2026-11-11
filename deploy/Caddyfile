@@ -1,0 +1,16 @@
+# Caddy gets and renews the Let's Encrypt certificate for {$DOMAIN} automatically
+# and redirects HTTP to HTTPS. Everything is forwarded to the nginx container.
+{
+	email {$ACME_EMAIL}
+}
+
+{$DOMAIN} {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		-Server
+	}
+
+	reverse_proxy web:8080
+}

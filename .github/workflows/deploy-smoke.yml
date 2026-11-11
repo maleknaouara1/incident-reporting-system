@@ -1,0 +1,103 @@
+name: Deploy smoke test
+
+# Builds the Docker images and starts the production stack (minus Caddy/TLS),
+# then checks it end to end through nginx: static app, security headers, API,
+# database migrations and the HttpOnly refresh cookie.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      FRONTEND_REPO: maleknaouara1/incident-reporting-angular
+    steps:
+      - uses: actions/checkout@v4
+
+      # Test the frontend branch with the same name when it exists, otherwise main
+      - name: Pick frontend ref
+        id: frontend
+        run: |
+          branch="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}"
+          if git ls-remote --exit-code --heads "https://github.com/${FRONTEND_REPO}.git" "$branch" > /dev/null; then
+            echo "ref=$branch" >> "$GITHUB_OUTPUT"
+          else
+            echo "ref=main" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.FRONTEND_REPO }}
+          ref: ${{ steps.frontend.outputs.ref }}
+          path: frontend
+
+      - name: Write test .env
+        working-directory: deploy
+        run: |
+          cat > .env <<EOF
+          DOMAIN=localhost
+          SQL_SA_PASSWORD=Smoke-Test-$(openssl rand -hex 8)-Aa1!
+          JWT_KEY=$(openssl rand -base64 48)
+          ADMIN_EMAIL=admin@smoke.test
+          ADMIN_PASSWORD=Smoke-Admin-Pass1
+          WEB_CONTEXT=../frontend
+          EOF
+
+      - name: Build and start the stack
+        working-directory: deploy
+        # No --wait: the one-shot "migrate" service exits by design; the checks below poll instead
+        run: docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d --build db api web
+
+      - name: Smoke checks
+        run: |
+          set -euo pipefail
+          base=http://localhost:8080
+          # SQL Server start-up and migrations take a while on a fresh runner
+          for i in $(seq 1 90); do
+            if curl -fsS "$base/api/health" > /dev/null 2>&1; then break; fi
+            sleep 2
+          done
+
+          echo "== API health through nginx"
+          curl -fsS "$base/api/health" | grep -q Healthy
+
+          echo "== Angular app and security headers"
+          curl -fsS -D headers.txt "$base/" -o index.html
+          grep -q "<app-root" index.html
+          grep -qi "^content-security-policy:.*frame-ancestors 'none'" headers.txt
+          grep -qi "^x-content-type-options: nosniff" headers.txt
+          echo "== Deep links fall back to the app"
+          curl -fsS "$base/incidents/123" | grep -q "<app-root"
+
+          echo "== Migrations ran and the seeded Admin can sign in (HTTPS as seen behind Caddy)"
+          curl -sS -D login.txt -o login.json -H "Content-Type: application/json" \
+            -H "X-Forwarded-Proto: https" \
+            -d '{"email":"admin@smoke.test","password":"Smoke-Admin-Pass1"}' "$base/api/auth/login"
+          grep -q '"success":true' login.json
+          if grep -qi refreshToken login.json; then echo "refresh token leaked in the body"; exit 1; fi
+          grep -i "^set-cookie: ir_refresh_token=" login.txt | grep -qi "httponly"
+          grep -i "^set-cookie: ir_refresh_token=" login.txt | grep -qi "secure"
+
+          echo "== Protected endpoints still require a token"
+          test "$(curl -s -o /dev/null -w '%{http_code}' "$base/api/incidents")" = "401"
+          echo "All smoke checks passed"
+
+      - name: Logs on failure
+        if: failure()
+        working-directory: deploy
+        run: docker compose -f docker-compose.yml -f docker-compose.ci.yml logs --no-color --tail=200
+
+      - name: Tear down
+        if: always()
+        working-directory: deploy
+        run: docker compose -f docker-compose.yml -f docker-compose.ci.yml down -v

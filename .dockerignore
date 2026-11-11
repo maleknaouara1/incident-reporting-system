@@ -1,0 +1,12 @@
+**/bin/
+**/obj/
+**/.vs/
+**/*.user
+.git/
+.github/
+tests/
+docs/
+deploy/
+src/IncidentReporting.API/App_Data/
+**/appsettings.Development.json
+**/.env
